@@ -1,0 +1,42 @@
+name: MIA → Dropbox (GitHub mirror)
+
+on:
+  schedule:
+    - cron: '23 2 * * *'          # everyday 02 h 23 UTC
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mirror repo
+        uses: actions/checkout@v4
+        with:
+          repository: emijrp/www.marxists.org
+          path: mia
+          fetch-depth: 1
+
+      - name: Build raw URL list
+        run: |
+          cd mia
+          git ls-files -z | while IFS= read -r -d '' f; do
+            echo "http://raw.githubusercontent.com/emijrp/www.marxists.org/master/$f"
+          done > ../urls.txt
+          echo "☑️  $(wc -l < ../urls.txt) URLs listées"
+
+      - name: Push to Dropbox (100 URL/h)
+        env:
+          DBX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
+        run: |
+          split -l 100 urls.txt shard_
+          for s in shard_*; do
+            while read -r url; do
+              rel=${url#http://raw.githubusercontent.com/emijrp/www.marxists.org/master}
+              jq -nc --arg p "/MIA${rel}" --arg u "$url" '{path:$p, url:$u}' |
+              curl -s https://api.dropboxapi.com/2/files/save_url \
+                   -H "Authorization: Bearer ${DBX_TOKEN}" \
+                   -H "Content-Type: application/json" \
+                   -d @-
+            done < "$s"
+            sleep 3600    # respecte le quota 20 000 appels/h
+          done
